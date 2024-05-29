@@ -620,9 +620,75 @@ VARIANT toComVariant(T)(T arg) {
 		ret.vt = 8;
 		import std.utf;
 		ret.bstrVal = SysAllocString(toUTFz!(wchar*)(arg));
+	} else static if (is(T : E[], E)) {
+		auto sizes = ndArrayDimensions!uint(arg);
+		SAFEARRAYBOUND[sizes.length] saBound;
+		foreach (i; 0 .. sizes.length) {
+			saBound[i].lLbound = 0;
+			saBound[i].cElements = sizes[i];
+		}
+		const vt = fromDType!E;
+		SAFEARRAY* sa = SafeArrayCreate(vt, saBound.length, saBound.ptr);
+		int[sizes.length] indices;
+		void fill(int dim, T)(T val) {
+			static if (dim >= indices.length) {
+				SafeArrayPutElement(sa, indices.ptr, &val);
+				return;
+			} else {
+				foreach (i; 0 .. val.length) {
+					indices[dim] = cast(int) i;
+					fill!(dim + 1)(val[i]);
+				}
+			}
+		}
+		fill!(0)(arg);
+		ret.vt = VARENUM.VT_ARRAY | vt;
+		ret.parray = sa;
 	} else static assert(0, "Unsupported type (yet) " ~ T.stringof);
 
 	return ret;
+}
+
+/// Returns: for any multi-dimensional array, a static array of `length` values for each dimension.
+auto ndArrayDimensions(I, T)(T arg) {
+	static if (is(T == E[], E) || is(T == E[n], E, int n)) {
+        alias A = typeof(ndArrayDimensions!I(arg[0]));
+        I[1 + A.length] res = 0;
+        if (arg.length != 0) {
+            auto s = ndArrayDimensions!I(arg[0]);
+            res[1 .. $] = s[];
+        }
+        res[0] = cast(I) arg.length;
+		return res;
+	} else {
+		I[0] res;
+		return res;
+	}
+}
+
+unittest {
+	auto x = new float[][][](2, 3, 5);
+	assert(ndArrayDimensions!uint(x) == [2, 3, 5]);
+    char[4][][5] y;
+    y[0].length = 3;
+    assert(ndArrayDimensions!uint(y) == [5, 3, 4]);
+}
+
+/// Get VARENUM tag for basic type T
+template fromDType(T) {
+	static if(is(T == int)) {
+		enum fromDType = VARENUM.VT_I4;
+	} else static if (is(T == float)) {
+		enum fromDType = VARENUM.VT_R4;
+	} else static if (is(T == double)) {
+		enum fromDType = VARENUM.VT_R8;
+	} else static if(is(T == bool)) {
+		enum fromDType = VARENUM.VT_BOOL;
+	} else static if (is(T == E[], E)) {
+		enum fromDType = fromDType!E;
+	} else {
+		static assert(0, "don't know VARENUM for " ~ T.stringof);
+	}
 }
 
 /*
